@@ -2,6 +2,7 @@
 #include <Windows.h>
 #include <json.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 
 typedef struct json_value_s*          json_val;
@@ -25,10 +26,14 @@ const char* find_id(json_arr_elem e) {
     return 0;
 }
 
-int find_default_profile(const char* cont, size_t s, json_arr_elem* outp) {
-    json_val  root = json_parse(cont, s);
-    json_obj  origin = root->payload;
-    json_obj  obj  = root->payload;
+int find_default_profile(const char* cont, size_t s, json_arr_elem* outp, json_val* root) {
+    *root = json_parse(cont, s);
+    if (!json_value_as_object(*root)) {
+        printf("Failed to parse json\n");
+        return 1;
+    }
+    json_obj  origin = (*root)->payload;
+    json_obj  obj  = (*root)->payload;
     json_elem iter = obj->start;
     int i = 0;
     while (iter) {
@@ -83,15 +88,76 @@ int find_default_profile(const char* cont, size_t s, json_arr_elem* outp) {
     return 0;
 }
 
-int make_changes(json_arr_elem profile) {
-    
-    return 0;
-//    static char outs[1<<14];
-//    json_write_pretty_object(origin, 2, "   ", "\n", outs);
-//    printf("%s\n", outs);    
+typedef struct  {
+    const char* newFont;
+} json_changes;
+
+
+int change_font(json_obj fobj, const char* newf) {
+    json_elem iter = fobj->start;
+    while (iter) {
+        if (strcmp(iter->name->string, "face")) {
+            iter = iter->next;
+            continue;
+        } 
+        json_str str = (iter->value->payload);
+        str->string      = newf;
+        str->string_size = strlen(newf);
+        return 0;
+    }
+    return 1;
 }
 
-int process() {
+int make_changes(json_arr_elem profile, const json_changes * const diff) {
+    json_obj obj = (profile->value->payload);
+    json_elem iter = obj->start; 
+    while (iter) {
+        if (diff->newFont && !strcmp(iter->name->string, "font")) {
+            change_font(iter->value->payload, diff->newFont);
+        }
+        iter = iter->next;
+    }
+    return 0;
+}
+
+
+void debug_print(json_val root) {
+    char* outs = malloc(1<<14);
+    json_write_pretty_object((json_obj)root->payload, 2, "   ", "\n", outs);
+    printf("%s\n", outs);    
+    free(outs);
+}
+
+void get_path(char* path) {
+    static char  appd[256];
+    const char* ext = "\\Packages\\Microsoft.WindowsTerminal_8wekyb3d8bbwe\\LocalState\\settings.json";
+    int    i;
+    char   ch;
+    size_t len = 256;
+    i = 0;
+    getenv_s(&len, appd, sizeof(appd), "localappdata");
+    while ((ch = appd[i])) {
+        path[i] = ch;
+        i++;
+    }
+    int j = 0; ch = 0;
+    while ((ch = ext[j])) {
+        path[i] = ch;
+        i++; j++;
+    }
+    path[i] = 0;
+    i = 0; ch = 0;
+}
+
+void save_json(const char* path, json_val root, char* cont) {
+    FILE* f;
+    fopen_s(&f, path,"w");
+    char* off = json_write_pretty_object((json_obj)root->payload, 2, "  ", "\n", cont);
+    fwrite(cont, off - cont, 1, f);
+    fclose(f);
+}
+
+int process(json_changes* c) {
     int    i;
     int    s;
     int    state;
@@ -100,24 +166,59 @@ int process() {
     json_arr_elem outp;
     def_prof_hash[0] = 0;
     prof_hash[0]     = 0;
-    char*       cont = 0;
-    const char* path = "settings.json";
-    fopen_s(&f, path, "r+");
+    char*        cont = 0;
+    static char  path[512];
+    get_path(path);
+    i = 0;
+    fopen_s(&f, path, "rb");
     if (!f) return 1;
-    i    = 0;
-    hdl  = (HANDLE)_get_osfhandle(_fileno(f));
-    s    = GetFileSize(hdl, 0);
-    cont = (char*)malloc(s);
-    
+    i       = 0;
+    hdl     = (HANDLE)_get_osfhandle(_fileno(f));
+    s       = GetFileSize(hdl, 0);
+    cont    = (char*)malloc(s + 512);
+    cont[s] = 0;
     fread(cont, s, 1, f);
-    i = find_default_profile(cont, s, &outp);
-    make_changes(outp);
+    fclose(f);
+    json_val root;
+    i = find_default_profile(cont, s, &outp, &root); 
+    if (i) {
+        goto end_of_func;
+    }
+    make_changes(outp, c);
+    //debug_print(root);
+    save_json(path, root, cont);
+end_of_func:
+    free(root);
     free(cont);
     return i;
 }
 
+void print_help() {
+    printf("%s\n", "Usage: cmdconf [opt][value]");
+    printf("%s\n", "commands:");
+    printf("%s\n", "  -f|--font [font_name]: change the font");
+    printf("%s\n", "  -h|--help            : print this help");
+}
 
-int main() {
-    process();
+#define check_command(str, shrt, lg) (!strcmp(argv[i], shrt) || !strcmp(argv[i], lg))
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        print_help();
+    }
+    int i = 1;
+    json_changes ch;
+    ch.newFont = 0;
+    while (i < argc) {
+        if (check_command(argv[i], "-f", "--font") && i != (argc - 1)) {
+            i++;
+            ch.newFont = argv[i];
+        }
+        else if (check_command(argv[i], "-h", "--help")) {
+            print_help();
+        }
+        i++;
+    }
+    if (ch.newFont)
+        process(&ch);
     return 0;
 }
