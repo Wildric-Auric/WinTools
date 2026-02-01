@@ -10,6 +10,7 @@ typedef struct json_object_s*         json_obj;
 typedef struct json_object_element_s* json_elem;
 typedef struct json_array_element_s*  json_arr_elem;
 typedef struct json_string_s*         json_str;
+typedef struct json_number_s*         json_num;
 typedef struct json_array_s*          json_arr;
 
 static char def_prof_hash[64]; 
@@ -89,31 +90,62 @@ int find_default_profile(const char* cont, size_t s, json_arr_elem* outp, json_v
 }
 
 typedef struct  {
-    const char* newFont;
+    const char* font_name;
+    const char* font_size;
+    const char* bg;
+    const char* bg_opacity;
+    const char* op;
+    const char* use_acrylic;
 } json_changes;
 
 
-int change_font(json_obj fobj, const char* newf) {
+int change_font(json_obj fobj, json_changes* diff) {
     json_elem iter = fobj->start;
     while (iter) {
-        if (strcmp(iter->name->string, "face")) {
-            iter = iter->next;
-            continue;
+        if (diff->font_name && !strcmp(iter->name->string, "face")) {
+            json_str str = (iter->value->payload);
+            str->string      = diff->font_name;
+            str->string_size = strlen(diff->font_name);
+            diff->font_name  = 0;
         } 
-        json_str str = (iter->value->payload);
-        str->string      = newf;
-        str->string_size = strlen(newf);
-        return 0;
+        if (diff->font_size && !strcmp(iter->name->string, "size")) {
+            json_num n      = (json_num)(iter->value->payload);
+            n->number       = diff->font_size;
+            n->number_size  = strlen(diff->font_size);
+            diff->font_size = 0;
+        }
+        iter = iter->next;
     }
     return 1;
 }
 
-int make_changes(json_arr_elem profile, const json_changes * const diff) {
+int make_changes(json_arr_elem profile, json_changes* out_diff) {
     json_obj obj = (profile->value->payload);
     json_elem iter = obj->start; 
     while (iter) {
-        if (diff->newFont && !strcmp(iter->name->string, "font")) {
-            change_font(iter->value->payload, diff->newFont);
+        if (!strcmp(iter->name->string, "font")) {
+            change_font(iter->value->payload, out_diff);
+        }
+        if (out_diff->bg && !strcmp(iter->name->string, "backgroundImage")) {
+            json_str str = iter->value->payload;
+            str->string = out_diff->bg;
+            str->string_size = strlen(out_diff->bg);
+            out_diff->bg = 0;
+        }
+        if (out_diff->bg_opacity && !strcmp(iter->name->string, "backgroundImageOpacity")) {
+            json_num str = iter->value->payload;
+            str->number = out_diff->bg_opacity;
+            str->number_size = strlen(out_diff->bg_opacity);
+            out_diff->bg_opacity = 0;
+        }
+        if (out_diff->op && !strcmp(iter->name->string, "opacity")) {
+            json_num str = iter->value->payload;
+            str->number  = out_diff->op;
+            str->number_size = strlen(out_diff->op);
+            out_diff->op = 0;
+        }
+        if (out_diff->use_acrylic && !strcmp(iter->name->string, "useAcrylic")) {
+            //json_val t = iter->value->payload;
         }
         iter = iter->next;
     }
@@ -196,29 +228,78 @@ end_of_func:
 void print_help() {
     printf("%s\n", "Usage: cmdconf [opt][value]");
     printf("%s\n", "commands:");
-    printf("%s\n", "  -f|--font [font_name]: change the font");
-    printf("%s\n", "  -h|--help            : print this help");
+    printf("%s\n", "  -h  |--help                           : print this help");
+    printf("%s\n", "  -f  |--font         [font_name]       : change the font");
+    printf("%s\n", "  -fs |--font-size    [font_size]       : change font size");
+    printf("%s\n", "  -bg |--bg-image     [path_to_img]     : change background image");
+    printf("%s\n", "  -bgo|--bg-opacity   [number 0 to 1]   : change background image opacity");
+    printf("%s\n", "  -op |--opacity      [number 0 to 100] : change terminal opacity");
 }
 
 #define check_command(str, shrt, lg) (!strcmp(argv[i], shrt) || !strcmp(argv[i], lg))
+#define require(i) (i) < (argc - (i))
 int main(int argc, char** argv) {
     if (argc < 2) {
         print_help();
     }
-    int i = 1;
-    json_changes ch;
-    ch.newFont = 0;
+    int i  = 1;
+    int sp = 0;
+    json_changes ch = {0};
     while (i < argc) {
-        if (check_command(argv[i], "-f", "--font") && i != (argc - 1)) {
+        if (check_command(argv[i], "-f", "--font") && require(1)) {
             i++;
-            ch.newFont = argv[i];
+            ch.font_name = argv[i];
+            sp++;
+        }
+        else if (check_command(argv[i], "-fs", "--font-size") && require(1)) {
+            i++;
+            float a = strtof(argv[i], 0);
+            if (!a) {
+                printf("Invalid argument for font size: %s", argv[i]);
+            }
+            else {
+                ch.font_size = argv[i];
+                sp++;
+            }
+        }
+        else if (check_command(argv[i], "-bg", "--bg-image") && require(1)) {
+            i++;
+            ch.bg = argv[i];
+            sp++;
+        }
+        else if (check_command(argv[i], "-bgo", "--bg-opacity") && require(1)) {
+            i++;
+            float a = strtof(argv[i], 0);
+            if (!a) {
+                printf("Invalid argument for bg opacity: %s", argv[i]);
+            }
+            else {
+                ch.bg_opacity = argv[i];
+                sp++; 
+            }
+        }
+        else if (check_command(argv[i], "-op", "--opacity") && require(1)) {
+            i++;
+            float a = strtof(argv[i], 0);
+            if (!a) {
+                printf("Invalid argument for opacity: %s", argv[i]);
+            }
+            else {
+                ch.op = argv[i];
+                sp++; 
+            }
+        }
+        else if (check_command(argv[i], "-ac", "--acrylic") && require(1)) {
+            i++;
+            ch.use_acrylic = argv[i];
+            sp++;
         }
         else if (check_command(argv[i], "-h", "--help")) {
             print_help();
         }
         i++;
     }
-    if (ch.newFont)
+    if (sp)
         process(&ch);
     return 0;
 }
